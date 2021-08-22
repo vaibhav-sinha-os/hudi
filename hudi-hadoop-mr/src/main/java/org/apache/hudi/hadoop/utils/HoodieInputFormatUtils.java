@@ -18,9 +18,10 @@
 
 package org.apache.hudi.hadoop.utils;
 
-import org.apache.hadoop.hive.ql.io.orc.OrcInputFormat;
+import org.apache.hadoop.hive.ql.io.orc.HoodieOrcInputFormat;
 import org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat;
 import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
+import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hudi.common.config.HoodieMetadataConfig;
 import org.apache.hudi.common.engine.HoodieLocalEngineContext;
 import org.apache.hudi.common.fs.FSUtils;
@@ -53,7 +54,6 @@ import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat;
 import org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe;
-import org.apache.hadoop.mapred.FileInputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.log4j.LogManager;
@@ -84,7 +84,7 @@ public class HoodieInputFormatUtils {
 
   private static final Logger LOG = LogManager.getLogger(HoodieInputFormatUtils.class);
 
-  public static FileInputFormat getInputFormat(HoodieFileFormat baseFileFormat, boolean realtime, Configuration conf) {
+  public static InputFormat getInputFormat(HoodieFileFormat baseFileFormat, boolean realtime, Configuration conf) {
     switch (baseFileFormat) {
       case PARQUET:
         if (realtime) {
@@ -103,6 +103,14 @@ public class HoodieInputFormatUtils {
           return inputFormat;
         } else {
           HoodieHFileInputFormat inputFormat = new HoodieHFileInputFormat();
+          inputFormat.setConf(conf);
+          return inputFormat;
+        }
+      case ORC:
+        if (realtime) {
+          throw new HoodieIOException("Hoodie RealtimeInputFormat not implemented for ORC file format ");
+        } else {
+          HoodieOrcInputFormat inputFormat = new HoodieOrcInputFormat();
           inputFormat.setConf(conf);
           return inputFormat;
         }
@@ -126,7 +134,11 @@ public class HoodieInputFormatUtils {
           return HoodieHFileInputFormat.class.getName();
         }
       case ORC:
-        return OrcInputFormat.class.getName();
+        if (realtime) {
+          throw new HoodieIOException("Hoodie RealtimeInputFormat not implemented for ORC file format ");
+        } else {
+          return HoodieOrcInputFormat.class.getName();
+        }
       default:
         throw new HoodieIOException("Hoodie InputFormat not implemented for base file format " + baseFileFormat);
     }
@@ -158,13 +170,16 @@ public class HoodieInputFormatUtils {
     }
   }
 
-  public static FileInputFormat getInputFormat(String path, boolean realtime, Configuration conf) {
+  public static InputFormat getInputFormat(String path, boolean realtime, Configuration conf) {
     final String extension = FSUtils.getFileExtension(path);
     if (extension.equals(HoodieFileFormat.PARQUET.getFileExtension())) {
       return getInputFormat(HoodieFileFormat.PARQUET, realtime, conf);
     }
     if (extension.equals(HoodieFileFormat.HFILE.getFileExtension())) {
       return getInputFormat(HoodieFileFormat.HFILE, realtime, conf);
+    }
+    if (extension.equals(HoodieFileFormat.ORC.getFileExtension())) {
+      return getInputFormat(HoodieFileFormat.ORC, realtime, conf);
     }
     throw new HoodieIOException("Hoodie InputFormat not implemented for base file of type " + extension);
   }

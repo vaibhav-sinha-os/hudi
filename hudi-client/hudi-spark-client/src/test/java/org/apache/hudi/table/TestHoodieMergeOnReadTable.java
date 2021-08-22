@@ -18,6 +18,7 @@
 
 package org.apache.hudi.table;
 
+import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hudi.client.HoodieReadClient;
 import org.apache.hudi.client.SparkRDDWriteClient;
 import org.apache.hudi.client.WriteStatus;
@@ -1709,7 +1710,7 @@ public class TestHoodieMergeOnReadTable extends HoodieClientTestHarness {
   private FileStatus[] listStatus(JobConf jobConf, boolean realtime) throws IOException {
     // This is required as Hoodie InputFormats do not extend a common base class and FileInputFormat's
     // listStatus() is protected.
-    FileInputFormat inputFormat = HoodieInputFormatUtils.getInputFormat(baseFileFormat, realtime, jobConf);
+    InputFormat inputFormat = HoodieInputFormatUtils.getInputFormat(baseFileFormat, realtime, jobConf);
     switch (baseFileFormat) {
       case PARQUET:
         if (realtime) {

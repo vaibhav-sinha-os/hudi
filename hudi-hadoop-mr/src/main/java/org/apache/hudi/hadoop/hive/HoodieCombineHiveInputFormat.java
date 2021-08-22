@@ -971,7 +971,7 @@ public class HoodieCombineHiveInputFormat<K extends WritableComparable, V extend
           if (split.getPaths().length == 0) {
             continue;
           }
-          FileInputFormat inputFormat = HoodieInputFormatUtils.getInputFormat(split.getPath(0).toString(), true, job);
+          InputFormat inputFormat = HoodieInputFormatUtils.getInputFormat(split.getPath(0).toString(), true, job);
           recordReaders.add(inputFormat.getRecordReader(inputSplit, job, reporter));
         }
         return new HoodieCombineRealtimeRecordReader(job, split, recordReaders);

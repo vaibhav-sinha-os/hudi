@@ -22,14 +22,13 @@ import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.mapred.FileInputFormat;
+import org.apache.hadoop.mapred.InputSplit;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.RecordReader;
+import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.mapreduce.security.TokenCache;
-import org.apache.hadoop.util.ReflectionUtils;
-import org.apache.hadoop.util.StopWatch;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
@@ -49,7 +48,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -62,13 +60,6 @@ import java.util.stream.Collectors;
 public class HoodieOrcInputFormat extends OrcInputFormat implements Configurable {
 
   private static final Logger LOG = LogManager.getLogger(HoodieOrcInputFormat.class);
-
-//  public static final String INPUT_DIR_RECURSIVE = org.apache.hadoop.mapreduce.lib.input.FileInputFormat.INPUT_DIR_RECURSIVE;
-//
-//  private static final PathFilter HIDDEN_FILE_FILTER = p -> {
-//    String name = p.getName();
-//    return !name.startsWith("_") && !name.startsWith(".");
-//  };
 
   private static final FileInputFormatHelper FILE_INPUT_FORMAT_HELPER = new FileInputFormatHelper();
 
@@ -163,56 +154,10 @@ public class HoodieOrcInputFormat extends OrcInputFormat implements Configurable
     if (!incrementalInputPaths.isPresent()) {
       return null;
     }
-    //List<Path> incremental = Arrays.stream(incrementalInputPaths.get().split(",")).map(Path::new).collect(Collectors.toList());
-    //FileStatus[] fileStatuses = listStatus(job, incremental.toArray(new Path[0]));
     FileInputFormat.setInputPaths(job, incrementalInputPaths.get());
     FileStatus[] fileStatuses = FILE_INPUT_FORMAT_HELPER.listStatus(job);
     return HoodieInputFormatUtils.filterIncrementalFileStatus(jobContext, tableMetaClient, timeline.get(), fileStatuses, commitsToCheck.get());
   }
-
-//  protected static FileStatus[] listStatus(JobConf job, Path[] dirs) throws IOException {
-//    // get tokens for all the required FileSystems..
-//    TokenCache.obtainTokensForNamenodes(job.getCredentials(), dirs, job);
-//
-//    // Whether we need to recursive look into the directory structure
-//    boolean recursive = job.getBoolean(INPUT_DIR_RECURSIVE, false);
-//
-//    // creates a MultiPathFilter with the hiddenFileFilter and the
-//    // user provided one (if any).
-//    List<PathFilter> filters = new ArrayList<PathFilter>();
-//    filters.add(HIDDEN_FILE_FILTER);
-//    PathFilter jobFilter = getInputPathFilter(job);
-//    if (jobFilter != null) {
-//      filters.add(jobFilter);
-//    }
-//    PathFilter inputFilter = new MultiPathFilter(filters);
-//
-//    List<FileStatus> results = new ArrayList<>();
-//    StopWatch sw = new StopWatch().start();
-//
-//    Iterable<FileStatus> locatedFiles = null;
-//    try {
-//      LocatedFileStatusFetcher locatedFileStatusFetcher = new LocatedFileStatusFetcher(job, dirs, recursive, inputFilter, false);
-//      locatedFiles = locatedFileStatusFetcher.getFileStatuses();
-//    } catch (InterruptedException e) {
-//      throw new IOException("Interrupted while getting file statuses");
-//    }
-//    locatedFiles.forEach(results::add);
-//
-//    sw.stop();
-//    if (LOG.isDebugEnabled()) {
-//      LOG.debug("Time taken to get FileStatuses: " + sw.now(TimeUnit.MILLISECONDS));
-//    }
-//    LOG.info("Total input paths to process : " + results.size());
-//    return results.toArray(new FileStatus[0]);
-//  }
-//
-//  private static PathFilter getInputPathFilter(JobConf conf) {
-//    Class<? extends PathFilter> filterClass = conf.getClass(
-//            org.apache.hadoop.mapreduce.lib.input.FileInputFormat.PATHFILTER_CLASS,
-//            null, PathFilter.class);
-//    return (filterClass != null) ? ReflectionUtils.newInstance(filterClass, conf) : null;
-//  }
 
   @Override
   public void setConf(Configuration conf) {
@@ -223,23 +168,6 @@ public class HoodieOrcInputFormat extends OrcInputFormat implements Configurable
   public Configuration getConf() {
     return conf;
   }
-
-//  private static class MultiPathFilter implements PathFilter {
-//    private List<PathFilter> filters;
-//
-//    public MultiPathFilter(List<PathFilter> filters) {
-//      this.filters = filters;
-//    }
-//
-//    public boolean accept(Path path) {
-//      for (PathFilter filter : filters) {
-//        if (!filter.accept(path)) {
-//          return false;
-//        }
-//      }
-//      return true;
-//    }
-//  }
 
   private static class FileInputFormatHelper extends FileInputFormat {
 

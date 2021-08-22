@@ -19,6 +19,7 @@
 package org.apache.hudi.hadoop.utils;
 
 import org.apache.hadoop.hive.ql.io.orc.HoodieOrcInputFormat;
+import org.apache.hadoop.hive.ql.io.orc.HoodieOrcRealtimeInputFormat;
 import org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat;
 import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
 import org.apache.hadoop.mapred.InputFormat;
@@ -108,7 +109,9 @@ public class HoodieInputFormatUtils {
         }
       case ORC:
         if (realtime) {
-          throw new HoodieIOException("Hoodie RealtimeInputFormat not implemented for ORC file format ");
+          HoodieOrcRealtimeInputFormat inputFormat = new HoodieOrcRealtimeInputFormat();
+          inputFormat.setConf(conf);
+          return inputFormat;
         } else {
           HoodieOrcInputFormat inputFormat = new HoodieOrcInputFormat();
           inputFormat.setConf(conf);
@@ -135,7 +138,7 @@ public class HoodieInputFormatUtils {
         }
       case ORC:
         if (realtime) {
-          throw new HoodieIOException("Hoodie RealtimeInputFormat not implemented for ORC file format ");
+          return HoodieOrcRealtimeInputFormat.class.getName();
         } else {
           return HoodieOrcInputFormat.class.getName();
         }

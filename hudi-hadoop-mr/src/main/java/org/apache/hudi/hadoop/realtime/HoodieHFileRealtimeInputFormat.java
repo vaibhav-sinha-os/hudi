@@ -104,7 +104,7 @@ public class HoodieHFileRealtimeInputFormat extends HoodieHFileInputFormat {
     ValidationUtils.checkArgument(split instanceof HoodieRealtimeFileSplit,
         "HoodieRealtimeRecordReader can only work on HoodieRealtimeFileSplit and not with " + split);
 
-    return new HoodieRealtimeRecordReader((HoodieRealtimeFileSplit) split, jobConf,
+    return new HoodieRealtimeRecordReader<>((HoodieRealtimeFileSplit) split, jobConf,
         super.getRecordReader(split, jobConf, reporter));
   }
 }

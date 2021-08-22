@@ -18,12 +18,18 @@
 
 package org.apache.hudi.hadoop.realtime;
 
+import org.apache.hadoop.hive.ql.io.orc.OrcRecordReaderWrapper;
+import org.apache.hadoop.hive.ql.io.orc.OrcStruct;
+import org.apache.hadoop.io.Writable;
+import org.apache.hudi.common.fs.FSUtils;
+import org.apache.hudi.common.model.HoodieFileFormat;
 import org.apache.hudi.exception.HoodieException;
 
 import org.apache.hadoop.io.ArrayWritable;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.RecordReader;
+import org.apache.hudi.exception.HoodieIOException;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
@@ -33,7 +39,7 @@ import java.io.IOException;
  * Realtime Record Reader which can do compacted (merge-on-read) record reading or unmerged reading (parquet and log
  * files read in parallel) based on job configuration.
  */
-public class HoodieRealtimeRecordReader implements RecordReader<NullWritable, ArrayWritable> {
+public class HoodieRealtimeRecordReader<T extends Writable> implements RecordReader<NullWritable, ArrayWritable> {
 
   // Property to enable parallel reading of parquet and log files without merging.
   public static final String REALTIME_SKIP_MERGE_PROP = "hoodie.realtime.merge.skip";
@@ -43,7 +49,7 @@ public class HoodieRealtimeRecordReader implements RecordReader<NullWritable, Ar
   private final RecordReader<NullWritable, ArrayWritable> reader;
 
   public HoodieRealtimeRecordReader(RealtimeSplit split, JobConf job,
-      RecordReader<NullWritable, ArrayWritable> realReader) {
+      RecordReader<NullWritable, T> realReader) {
     this.reader = constructRecordReader(split, job, realReader);
   }
 
@@ -59,15 +65,15 @@ public class HoodieRealtimeRecordReader implements RecordReader<NullWritable, Ar
    * @param realReader Parquet Record Reader
    * @return Realtime Reader
    */
-  private static RecordReader<NullWritable, ArrayWritable> constructRecordReader(RealtimeSplit split,
-      JobConf jobConf, RecordReader<NullWritable, ArrayWritable> realReader) {
+  private RecordReader<NullWritable, ArrayWritable> constructRecordReader(RealtimeSplit split,
+      JobConf jobConf, RecordReader<NullWritable, T> realReader) {
     try {
       if (canSkipMerging(jobConf)) {
         LOG.info("Enabling un-merged reading of realtime records");
-        return new RealtimeUnmergedRecordReader(split, jobConf, realReader);
+        return new RealtimeUnmergedRecordReader(split, jobConf, createRecordReaderWrapper(realReader, split));
       }
       LOG.info("Enabling merged reading of realtime records for split " + split);
-      return new RealtimeCompactedRecordReader(split, jobConf, realReader);
+      return new RealtimeCompactedRecordReader(split, jobConf, createRecordReaderWrapper(realReader, split));
     } catch (IOException ex) {
       LOG.error("Got exception when constructing record reader", ex);
       throw new HoodieException(ex);
@@ -106,5 +112,19 @@ public class HoodieRealtimeRecordReader implements RecordReader<NullWritable, Ar
 
   public RecordReader<NullWritable, ArrayWritable> getReader() {
     return this.reader;
+  }
+
+  private RecordReader<NullWritable, ArrayWritable> createRecordReaderWrapper(RecordReader<NullWritable, T> realReader, RealtimeSplit split) {
+    final String extension = FSUtils.getFileExtension(split.getPath().toString());
+    if (extension.equals(HoodieFileFormat.PARQUET.getFileExtension())) {
+      return (RecordReader<NullWritable, ArrayWritable>) realReader;
+    }
+    if (extension.equals(HoodieFileFormat.HFILE.getFileExtension())) {
+      return (RecordReader<NullWritable, ArrayWritable>) realReader;
+    }
+    if (extension.equals(HoodieFileFormat.ORC.getFileExtension())) {
+      return new OrcRecordReaderWrapper((RecordReader<NullWritable, OrcStruct>) realReader);
+    }
+    throw new HoodieIOException("HoodieRealtimeRecordReader not implemented for base file of type " + extension);
   }
 }

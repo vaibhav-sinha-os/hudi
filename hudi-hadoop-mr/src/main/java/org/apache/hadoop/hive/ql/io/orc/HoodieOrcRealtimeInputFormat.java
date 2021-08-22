@@ -16,27 +16,26 @@
  * limitations under the License.
  */
 
-package org.apache.hudi.hadoop.realtime;
-
-import org.apache.hudi.common.table.timeline.HoodieDefaultTimeline;
-import org.apache.hudi.common.util.ValidationUtils;
-import org.apache.hudi.hadoop.HoodieParquetInputFormat;
-import org.apache.hudi.hadoop.UseFileSplitsFromInputFormat;
-import org.apache.hudi.hadoop.utils.HoodieInputFormatUtils;
-import org.apache.hudi.hadoop.utils.HoodieRealtimeInputFormatUtils;
+package org.apache.hadoop.hive.ql.io.orc;
 
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.hive.serde2.ColumnProjectionUtils;
 import org.apache.hadoop.io.ArrayWritable;
 import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.FileSplit;
+import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.InputSplit;
 import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.Reporter;
+import org.apache.hudi.common.util.ValidationUtils;
+import org.apache.hudi.hadoop.UseFileSplitsFromInputFormat;
 import org.apache.hudi.hadoop.UseRecordReaderFromInputFormat;
+import org.apache.hudi.hadoop.realtime.HoodieRealtimeRecordReader;
+import org.apache.hudi.hadoop.realtime.RealtimeSplit;
+import org.apache.hudi.hadoop.utils.HoodieInputFormatUtils;
+import org.apache.hudi.hadoop.utils.HoodieRealtimeInputFormatUtils;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
@@ -49,9 +48,13 @@ import java.util.stream.Stream;
  */
 @UseRecordReaderFromInputFormat
 @UseFileSplitsFromInputFormat
-public class HoodieParquetRealtimeInputFormat extends HoodieParquetInputFormat implements Configurable {
+public class HoodieOrcRealtimeInputFormat implements InputFormat<NullWritable, ArrayWritable>, Configurable {
 
-  private static final Logger LOG = LogManager.getLogger(HoodieParquetRealtimeInputFormat.class);
+  private static final Logger LOG = LogManager.getLogger(HoodieOrcRealtimeInputFormat.class);
+
+  private Configuration conf;
+
+  private final HoodieOrcInputFormat hoodieOrcInputFormat = new HoodieOrcInputFormat();
 
   // To make Hive on Spark queries work with RT tables. Our theory is that due to
   // {@link org.apache.hadoop.hive.ql.io.parquet.ProjectionPusher}
@@ -61,22 +64,9 @@ public class HoodieParquetRealtimeInputFormat extends HoodieParquetInputFormat i
   @Override
   public InputSplit[] getSplits(JobConf job, int numSplits) throws IOException {
 
-    Stream<FileSplit> fileSplits = Arrays.stream(super.getSplits(job, numSplits)).map(is -> (FileSplit) is);
+    Stream<FileSplit> fileSplits = Arrays.stream(hoodieOrcInputFormat.getSplits(job, numSplits)).map(is -> (FileSplit) is);
 
     return HoodieRealtimeInputFormatUtils.getRealtimeSplits(job, fileSplits);
-  }
-
-  @Override
-  public FileStatus[] listStatus(JobConf job) throws IOException {
-    // Call the HoodieInputFormat::listStatus to obtain all latest parquet files, based on commit
-    // timeline.
-    return super.listStatus(job);
-  }
-
-  @Override
-  protected HoodieDefaultTimeline filterInstantsTimeline(HoodieDefaultTimeline timeline) {
-    // no specific filtering for Realtime format
-    return timeline;
   }
 
   void addProjectionToJobConf(final RealtimeSplit realtimeSplit, final JobConf jobConf) {
@@ -119,8 +109,12 @@ public class HoodieParquetRealtimeInputFormat extends HoodieParquetInputFormat i
     addProjectionToJobConf(realtimeSplit, jobConf);
     LOG.info("Creating record reader with readCols :" + jobConf.get(ColumnProjectionUtils.READ_COLUMN_NAMES_CONF_STR)
         + ", Ids :" + jobConf.get(ColumnProjectionUtils.READ_COLUMN_IDS_CONF_STR));
-    return new HoodieRealtimeRecordReader<>(realtimeSplit, jobConf,
-        super.getRecordReader(split, jobConf, reporter));
+    return new HoodieRealtimeRecordReader<>(realtimeSplit, jobConf, hoodieOrcInputFormat.getRecordReader(split, jobConf, reporter));
+  }
+
+  @Override
+  public void setConf(Configuration conf) {
+    this.conf = conf;
   }
 
   @Override

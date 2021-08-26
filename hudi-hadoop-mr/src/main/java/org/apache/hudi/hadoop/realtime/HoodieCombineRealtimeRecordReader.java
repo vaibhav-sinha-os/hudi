@@ -18,6 +18,9 @@
 
 package org.apache.hudi.hadoop.realtime;
 
+import org.apache.hadoop.hive.ql.io.orc.HoodieOrcUtils;
+import org.apache.hadoop.hive.ql.io.orc.OrcStruct;
+import org.apache.hadoop.io.Writable;
 import org.apache.hudi.common.util.ValidationUtils;
 import org.apache.hudi.hadoop.hive.HoodieCombineRealtimeFileSplit;
 import org.apache.hudi.hadoop.utils.HoodieRealtimeRecordReaderUtils;
@@ -47,8 +50,7 @@ public class HoodieCombineRealtimeRecordReader implements RecordReader<NullWrita
   // Points to the currently iterating record reader
   HoodieRealtimeRecordReader currentRecordReader;
 
-  public HoodieCombineRealtimeRecordReader(JobConf jobConf, CombineFileSplit split,
-      List<RecordReader> readers) {
+  public HoodieCombineRealtimeRecordReader(JobConf jobConf, CombineFileSplit split, List<RecordReader> readers) {
     try {
       ValidationUtils.checkArgument(((HoodieCombineRealtimeFileSplit) split).getRealtimeFileSplits().size() == readers
           .size(), "Num Splits does not match number of unique RecordReaders!");
@@ -65,8 +67,14 @@ public class HoodieCombineRealtimeRecordReader implements RecordReader<NullWrita
 
   @Override
   public boolean next(NullWritable key, ArrayWritable value) throws IOException {
-    if (this.currentRecordReader.next(key, value)) {
+    Writable readValue = this.currentRecordReader.createValue();
+    if (this.currentRecordReader.next(key, readValue)) {
       LOG.info("Reading from record reader");
+      if (readValue instanceof OrcStruct) {
+        HoodieOrcUtils.copyOrcStructToArrayWritable((OrcStruct) readValue, value);
+      } else {
+        value.set(((ArrayWritable) readValue).get());
+      }
       LOG.info(HoodieRealtimeRecordReaderUtils.arrayWritableToString(value));
       return true;
     } else if (recordReaders.size() > 0) {
@@ -88,7 +96,7 @@ public class HoodieCombineRealtimeRecordReader implements RecordReader<NullWrita
 
   @Override
   public ArrayWritable createValue() {
-    return this.currentRecordReader.createValue();
+    return new ArrayWritable(Writable.class);
   }
 
   @Override

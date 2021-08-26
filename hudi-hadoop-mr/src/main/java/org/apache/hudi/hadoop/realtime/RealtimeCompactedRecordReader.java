@@ -18,6 +18,8 @@
 
 package org.apache.hudi.hadoop.realtime;
 
+import org.apache.hadoop.hive.ql.io.orc.HoodieOrcUtils;
+import org.apache.hadoop.hive.ql.io.orc.OrcStruct;
 import org.apache.hudi.avro.HoodieAvroUtils;
 import org.apache.hudi.common.fs.FSUtils;
 import org.apache.hudi.common.model.HoodieRecord;
@@ -40,18 +42,18 @@ import org.apache.log4j.Logger;
 import java.io.IOException;
 import java.util.Map;
 
-class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
-    implements RecordReader<NullWritable, ArrayWritable> {
+class RealtimeCompactedRecordReader<T extends Writable> extends AbstractRealtimeRecordReader
+    implements RecordReader<NullWritable, T> {
 
   private static final Logger LOG = LogManager.getLogger(AbstractRealtimeRecordReader.class);
 
-  protected final RecordReader<NullWritable, ArrayWritable> parquetReader;
+  protected final RecordReader<NullWritable, T> fileRecordReader;
   private final Map<String, HoodieRecord<? extends HoodieRecordPayload>> deltaRecordMap;
 
   public RealtimeCompactedRecordReader(RealtimeSplit split, JobConf job,
-      RecordReader<NullWritable, ArrayWritable> realReader) throws IOException {
+      RecordReader<NullWritable, T> realReader) throws IOException {
     super(split, job);
-    this.parquetReader = realReader;
+    this.fileRecordReader = realReader;
     this.deltaRecordMap = getMergedLogRecordScanner().getRecords();
   }
 
@@ -86,10 +88,10 @@ class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
   }
 
   @Override
-  public boolean next(NullWritable aVoid, ArrayWritable arrayWritable) throws IOException {
+  public boolean next(NullWritable aVoid, T valueWritable) throws IOException {
     // Call the underlying parquetReader.next - which may replace the passed in ArrayWritable
     // with a new block of values
-    boolean result = this.parquetReader.next(aVoid, arrayWritable);
+    boolean result = this.fileRecordReader.next(aVoid, valueWritable);
     if (!result) {
       // if the result is false, then there are no more records
       return false;
@@ -98,9 +100,14 @@ class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
       // TODO(VC): Right now, we assume all records in log, have a matching base record. (which
       // would be true until we have a way to index logs too)
       // return from delta records map if we have some match.
-      String key = arrayWritable.get()[HoodieInputFormatUtils.HOODIE_RECORD_KEY_COL_POS].toString();
+      String key;
+      if (valueWritable instanceof OrcStruct) {
+        key = HoodieOrcUtils.getOrcStructField((OrcStruct) valueWritable, HoodieInputFormatUtils.HOODIE_RECORD_KEY_COL_POS).toString();
+      } else {
+        key = ((ArrayWritable) valueWritable).get()[HoodieInputFormatUtils.HOODIE_RECORD_KEY_COL_POS].toString();
+      }
       if (deltaRecordMap.containsKey(key)) {
-        // TODO(NA): Invoke preCombine here by converting arrayWritable to Avro. This is required since the
+        // TODO(NA): Invoke preCombine here by converting valueWritable to Avro. This is required since the
         // deltaRecord may not be a full record and needs values of columns from the parquet
         Option<GenericRecord> rec;
         rec = buildGenericRecordwithCustomPayload(deltaRecordMap.get(key));
@@ -108,10 +115,15 @@ class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
         // and move to the next record
         while (!rec.isPresent()) {
           // if current parquet reader has no record, return false
-          if (!this.parquetReader.next(aVoid, arrayWritable)) {
+          if (!this.fileRecordReader.next(aVoid, valueWritable)) {
             return false;
           }
-          String tempKey = arrayWritable.get()[HoodieInputFormatUtils.HOODIE_RECORD_KEY_COL_POS].toString();
+          String tempKey;
+          if (valueWritable instanceof OrcStruct) {
+            tempKey = HoodieOrcUtils.getOrcStructField((OrcStruct) valueWritable, HoodieInputFormatUtils.HOODIE_RECORD_KEY_COL_POS).toString();
+          } else {
+            tempKey = ((ArrayWritable) valueWritable).get()[HoodieInputFormatUtils.HOODIE_RECORD_KEY_COL_POS].toString();
+          }
           if (deltaRecordMap.containsKey(tempKey)) {
             rec = buildGenericRecordwithCustomPayload(deltaRecordMap.get(tempKey));
           } else {
@@ -119,9 +131,7 @@ class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
             return true;
           }
         }
-        if (!rec.isPresent()) {
-          return false;
-        }
+
         GenericRecord recordToReturn = rec.get();
         if (usesCustomPayload) {
           // If using a custom payload, return only the projection fields. The readerSchema is a schema derived from
@@ -129,28 +139,39 @@ class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
           recordToReturn = HoodieAvroUtils.rewriteRecord(rec.get(), getReaderSchema());
         }
         // we assume, a later safe record in the log, is newer than what we have in the map &
-        // replace it. Since we want to return an arrayWritable which is the same length as the elements in the latest
-        // schema, we use writerSchema to create the arrayWritable from the latest generic record
+        // replace it. Since we want to return an valueWritable which is the same length as the elements in the latest
+        // schema, we use writerSchema to create the valueWritable from the latest generic record
         ArrayWritable aWritable = (ArrayWritable) HoodieRealtimeRecordReaderUtils.avroToArrayWritable(recordToReturn, getHiveSchema());
         Writable[] replaceValue = aWritable.get();
         if (LOG.isDebugEnabled()) {
-          LOG.debug(String.format("key %s, base values: %s, log values: %s", key, HoodieRealtimeRecordReaderUtils.arrayWritableToString(arrayWritable),
+          ArrayWritable writableToPrint;
+          if (valueWritable instanceof OrcStruct) {
+            writableToPrint = HoodieOrcUtils.orcStructToArrayWritable((OrcStruct) valueWritable);
+          } else {
+            writableToPrint = (ArrayWritable) valueWritable;
+          }
+          LOG.debug(String.format("key %s, base values: %s, log values: %s", key, HoodieRealtimeRecordReaderUtils.arrayWritableToString(writableToPrint),
               HoodieRealtimeRecordReaderUtils.arrayWritableToString(aWritable)));
         }
-        Writable[] originalValue = arrayWritable.get();
-        try {
-          // Sometime originalValue.length > replaceValue.length.
-          // This can happen when hive query is looking for pseudo parquet columns like BLOCK_OFFSET_INSIDE_FILE
-          System.arraycopy(replaceValue, 0, originalValue, 0,
-              Math.min(originalValue.length, replaceValue.length));
-          arrayWritable.set(originalValue);
-        } catch (RuntimeException re) {
-          LOG.error("Got exception when doing array copy", re);
-          LOG.error("Base record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(arrayWritable));
-          LOG.error("Log record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(aWritable));
-          String errMsg = "Base-record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(arrayWritable)
-              + " ,Log-record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(aWritable) + " ,Error :" + re.getMessage();
-          throw new RuntimeException(errMsg, re);
+        if (valueWritable instanceof OrcStruct) {
+          HoodieOrcUtils.overwriteOrcStruct(HoodieOrcUtils.arrayWritableToOrcStruct(aWritable), (OrcStruct) valueWritable);
+        } else {
+          ArrayWritable arrayValueWritable = (ArrayWritable) valueWritable;
+          Writable[] originalValue = arrayValueWritable.get();
+          try {
+            // Sometime originalValue.length > replaceValue.length.
+            // This can happen when hive query is looking for pseudo parquet columns like BLOCK_OFFSET_INSIDE_FILE
+            System.arraycopy(replaceValue, 0, originalValue, 0,
+                    Math.min(originalValue.length, replaceValue.length));
+            arrayValueWritable.set(originalValue);
+          } catch (RuntimeException re) {
+            LOG.error("Got exception when doing array copy", re);
+            LOG.error("Base record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(arrayValueWritable));
+            LOG.error("Log record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(aWritable));
+            String errMsg = "Base-record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(arrayValueWritable)
+                    + " ,Log-record :" + HoodieRealtimeRecordReaderUtils.arrayWritableToString(aWritable) + " ,Error :" + re.getMessage();
+            throw new RuntimeException(errMsg, re);
+          }
         }
       }
     }
@@ -159,26 +180,26 @@ class RealtimeCompactedRecordReader extends AbstractRealtimeRecordReader
 
   @Override
   public NullWritable createKey() {
-    return parquetReader.createKey();
+    return fileRecordReader.createKey();
   }
 
   @Override
-  public ArrayWritable createValue() {
-    return parquetReader.createValue();
+  public T createValue() {
+    return fileRecordReader.createValue();
   }
 
   @Override
   public long getPos() throws IOException {
-    return parquetReader.getPos();
+    return fileRecordReader.getPos();
   }
 
   @Override
   public void close() throws IOException {
-    parquetReader.close();
+    fileRecordReader.close();
   }
 
   @Override
   public float getProgress() throws IOException {
-    return parquetReader.getProgress();
+    return fileRecordReader.getProgress();
   }
 }

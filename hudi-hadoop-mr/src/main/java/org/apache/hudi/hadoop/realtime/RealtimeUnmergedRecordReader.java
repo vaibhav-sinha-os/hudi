@@ -23,8 +23,11 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.hive.ql.io.orc.HoodieOrcUtils;
+import org.apache.hadoop.hive.ql.io.orc.OrcStruct;
 import org.apache.hadoop.io.ArrayWritable;
 import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hudi.common.fs.FSUtils;
@@ -40,23 +43,23 @@ import org.apache.hudi.hadoop.SafeParquetRecordReaderWrapper;
 import org.apache.hudi.hadoop.config.HoodieRealtimeConfig;
 import org.apache.hudi.hadoop.utils.HoodieRealtimeRecordReaderUtils;
 
-class RealtimeUnmergedRecordReader extends AbstractRealtimeRecordReader
-    implements RecordReader<NullWritable, ArrayWritable> {
+class RealtimeUnmergedRecordReader<T extends Writable> extends AbstractRealtimeRecordReader
+    implements RecordReader<NullWritable, T> {
 
   // Log Record unmerged scanner
   private final HoodieUnMergedLogRecordScanner logRecordScanner;
 
   // Parquet record reader
-  private final RecordReader<NullWritable, ArrayWritable> parquetReader;
+  private final RecordReader<NullWritable, T> fileRecordReader;
 
   // Parquet record iterator wrapper for the above reader
-  private final RecordReaderValueIterator<NullWritable, ArrayWritable> parquetRecordsIterator;
+  private final RecordReaderValueIterator<NullWritable, T> parquetRecordsIterator;
 
   // Executor that runs the above producers in parallel
-  private final BoundedInMemoryExecutor<ArrayWritable, ArrayWritable, ?> executor;
+  private final BoundedInMemoryExecutor<T, T, ?> executor;
 
   // Iterator for the buffer consumer
-  private final Iterator<ArrayWritable> iterator;
+  private final Iterator<T> iterator;
 
   /**
    * Construct a Unmerged record reader that parallely consumes both parquet and log records and buffers for upstream
@@ -67,11 +70,16 @@ class RealtimeUnmergedRecordReader extends AbstractRealtimeRecordReader
    * @param realReader Parquet Reader
    */
   public RealtimeUnmergedRecordReader(RealtimeSplit split, JobConf job,
-      RecordReader<NullWritable, ArrayWritable> realReader) {
+      RecordReader<NullWritable, T> realReader) {
     super(split, job);
-    this.parquetReader = new SafeParquetRecordReaderWrapper(realReader);
+    Writable value = realReader.createValue();
+    if (value instanceof OrcStruct) {
+      this.fileRecordReader = realReader;
+    } else {
+      this.fileRecordReader = (RecordReader<NullWritable, T>) new SafeParquetRecordReaderWrapper((RecordReader<NullWritable, ArrayWritable>) realReader);
+    }
     // Iterator for consuming records from parquet file
-    this.parquetRecordsIterator = new RecordReaderValueIterator<>(this.parquetReader);
+    this.parquetRecordsIterator = new RecordReaderValueIterator<>(this.fileRecordReader);
     this.executor = new BoundedInMemoryExecutor<>(
         HoodieRealtimeRecordReaderUtils.getMaxCompactionMemoryInBytes(jobConf), getParallelProducers(),
         Option.empty(), x -> x, new DefaultSizeEstimator<>());
@@ -90,7 +98,13 @@ class RealtimeUnmergedRecordReader extends AbstractRealtimeRecordReader
           // convert Hoodie log record to Hadoop AvroWritable and buffer
           GenericRecord rec = (GenericRecord) record.getData().getInsertValue(getReaderSchema()).get();
           ArrayWritable aWritable = (ArrayWritable) HoodieRealtimeRecordReaderUtils.avroToArrayWritable(rec, getHiveSchema());
-          this.executor.getQueue().insertRecord(aWritable);
+          T writable;
+          if (value instanceof OrcStruct) {
+            writable = (T) HoodieOrcUtils.arrayWritableToOrcStruct(aWritable);
+          } else {
+            writable = (T) aWritable;
+          }
+          this.executor.getQueue().insertRecord(writable);
         })
         .build();
     // Start reading and buffering
@@ -100,8 +114,8 @@ class RealtimeUnmergedRecordReader extends AbstractRealtimeRecordReader
   /**
    * Setup log and parquet reading in parallel. Both write to central buffer.
    */
-  private List<BoundedInMemoryQueueProducer<ArrayWritable>> getParallelProducers() {
-    List<BoundedInMemoryQueueProducer<ArrayWritable>> producers = new ArrayList<>();
+  private List<BoundedInMemoryQueueProducer<T>> getParallelProducers() {
+    List<BoundedInMemoryQueueProducer<T>> producers = new ArrayList<>();
     producers.add(new FunctionBasedQueueProducer<>(buffer -> {
       logRecordScanner.scan();
       return null;
@@ -111,23 +125,28 @@ class RealtimeUnmergedRecordReader extends AbstractRealtimeRecordReader
   }
 
   @Override
-  public boolean next(NullWritable key, ArrayWritable value) {
+  public boolean next(NullWritable key, T value) {
     if (!iterator.hasNext()) {
       return false;
     }
     // Copy from buffer iterator and set to passed writable
-    value.set(iterator.next().get());
+    if (value instanceof ArrayWritable) {
+      ((ArrayWritable) value).set(((ArrayWritable) iterator.next()).get());
+    }
+    if (value instanceof OrcStruct) {
+      HoodieOrcUtils.cloneOrcStruct((OrcStruct) iterator.next(), (OrcStruct) value);
+    }
     return true;
   }
 
   @Override
   public NullWritable createKey() {
-    return parquetReader.createKey();
+    return fileRecordReader.createKey();
   }
 
   @Override
-  public ArrayWritable createValue() {
-    return parquetReader.createValue();
+  public T createValue() {
+    return fileRecordReader.createValue();
   }
 
   @Override
@@ -145,6 +164,6 @@ class RealtimeUnmergedRecordReader extends AbstractRealtimeRecordReader
 
   @Override
   public float getProgress() throws IOException {
-    return Math.min(parquetReader.getProgress(), logRecordScanner.getProgress());
+    return Math.min(fileRecordReader.getProgress(), logRecordScanner.getProgress());
   }
 }

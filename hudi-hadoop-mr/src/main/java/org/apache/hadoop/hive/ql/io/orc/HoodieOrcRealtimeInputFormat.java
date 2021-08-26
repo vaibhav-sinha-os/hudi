@@ -21,7 +21,6 @@ package org.apache.hadoop.hive.ql.io.orc;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.serde2.ColumnProjectionUtils;
-import org.apache.hadoop.io.ArrayWritable;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.FileSplit;
@@ -48,7 +47,7 @@ import java.util.stream.Stream;
  */
 @UseRecordReaderFromInputFormat
 @UseFileSplitsFromInputFormat
-public class HoodieOrcRealtimeInputFormat implements InputFormat<NullWritable, ArrayWritable>, Configurable {
+public class HoodieOrcRealtimeInputFormat implements InputFormat<NullWritable, OrcStruct>, Configurable {
 
   private static final Logger LOG = LogManager.getLogger(HoodieOrcRealtimeInputFormat.class);
 
@@ -100,7 +99,7 @@ public class HoodieOrcRealtimeInputFormat implements InputFormat<NullWritable, A
   }
 
   @Override
-  public RecordReader<NullWritable, ArrayWritable> getRecordReader(final InputSplit split, final JobConf jobConf,
+  public RecordReader<NullWritable, OrcStruct> getRecordReader(final InputSplit split, final JobConf jobConf,
                                                                    final Reporter reporter) throws IOException {
     // sanity check
     ValidationUtils.checkArgument(split instanceof RealtimeSplit,
